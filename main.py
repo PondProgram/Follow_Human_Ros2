@@ -1,11 +1,14 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import String  
 import cv2
+import base64
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 
 thres = 0.6
 nmsThres = 0.2
-cap = cv2.VideoCapture(2) 
+cap = cv2.VideoCapture(0) 
 cap.set(3, 640)
 cap.set(4, 480)
 
@@ -29,10 +32,23 @@ net.setInputSwapRB(True)
 class RobotController(Node):
     def __init__(self):
         super().__init__('robot_controller')
+
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10  
+        )
+        
+        # ROS2 Publishers
+        # Velocity command publisher
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
+        
+        # Base64 image publisher
+        self.base64_publisher = self.create_publisher(String, '/camera/base64_image', 10)
+        
         self.twist = Twist()
         self.threshold = 80
-
 
     def move_robot(self, x_deviation, y_deviation):
         max_linear_speed = 0.1  
@@ -61,6 +77,31 @@ class RobotController(Node):
 
         self.publisher_.publish(twist)
 
+    def frame_to_base64(self, frame):
+        """
+        Convert frame to base64 encoded string
+        
+        Args:
+            frame (numpy.ndarray): OpenCV image frame
+        
+        Returns:
+            str: Base64 encoded image string
+        """
+        _, buffer = cv2.imencode('.jpg', frame)
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        return base64_image
+
+    def publish_base64_image(self, base64_image):
+        """
+        Publish base64 encoded image to ROS2 topic
+        
+        Args:
+            base64_image (str): Base64 encoded image string
+        """
+        msg = String()
+        msg.data = base64_image
+        self.base64_publisher.publish(msg)
+
 def main():
     rclpy.init()
     robot_controller = RobotController()
@@ -76,12 +117,12 @@ def main():
             classIds, confs, bbox = net.detect(frame, confThreshold=thres, nmsThreshold=nmsThres)
             center_x = width // 2
             center_y = height // 2
-            cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 255), 2)
-            cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
-            cv2.line(frame, (center_x - robot_controller.threshold, 0), 
-                     (center_x - robot_controller.threshold, height), (0, 0, 255), 2)
-            cv2.line(frame, (center_x + robot_controller.threshold, 0), 
-                     (center_x + robot_controller.threshold, height), (0, 0, 255), 2)
+            # cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 255), 2)
+            # cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
+            # cv2.line(frame, (center_x - robot_controller.threshold, 0), 
+            #          (center_x - robot_controller.threshold, height), (0, 0, 255), 2)
+            # cv2.line(frame, (center_x + robot_controller.threshold, 0), 
+            #          (center_x + robot_controller.threshold, height), (0, 0, 255), 2)
 
             x_deviation = None
             if len(classIds) > 0:
@@ -99,9 +140,10 @@ def main():
                         if x_deviation is not None and y_deviation is not None:
                             robot_controller.move_robot(x_deviation, y_deviation)
 
-            cv2.imshow("Image", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            # Convert frame to base64 and publish
+            resized_frame = cv2.resize(frame, (240, 160)) 
+            base64_image = robot_controller.frame_to_base64(resized_frame)
+            robot_controller.publish_base64_image(base64_image)
 
     finally:
         cap.release()
