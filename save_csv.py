@@ -5,7 +5,6 @@ from nav_msgs.msg import Odometry
 import csv
 from datetime import datetime
 import math
-from tf_transformations import euler_from_quaternion
 
 class RobotPoseLogger(Node):
     def __init__(self):
@@ -28,6 +27,16 @@ class RobotPoseLogger(Node):
         self.last_saved_x = 0.0
         self.last_saved_y = 0.0
         self.is_first_point = True  # ตัวแปรสำหรับจุดแรก
+
+    def quaternion_to_yaw(self, x, y, z, w):
+        """
+        แปลง quaternion เป็นมุม yaw โดยใช้การคำนวณโดยตรง
+        """
+        # คำนวณ yaw โดยตรงจาก quaternion
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return yaw
         
     def calculate_distance(self, x1, y1, x2, y2):
         return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -46,10 +55,14 @@ class RobotPoseLogger(Node):
             if self.is_first_point or distance >= 1.0:
                 # ดึงค่า quaternion
                 orientation_q = msg.pose.pose.orientation
-                q = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
                 
-                # แปลง quaternion เป็น euler angles (roll, pitch, yaw)
-                roll, pitch, yaw = euler_from_quaternion(q)
+                # แปลง quaternion เป็น yaw โดยใช้ฟังก์ชันที่สร้างขึ้น
+                yaw = self.quaternion_to_yaw(
+                    orientation_q.x,
+                    orientation_q.y,
+                    orientation_q.z,
+                    orientation_q.w
+                )
                 
                 # แปลง yaw เป็นองศา
                 yaw_deg = math.degrees(yaw)
