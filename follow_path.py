@@ -5,7 +5,6 @@ from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry
 import csv
 import math
-from tf_transformations import euler_from_quaternion
 import numpy as np
 
 class RobotWaypointFollower(Node):
@@ -28,28 +27,36 @@ class RobotWaypointFollower(Node):
         self.current_yaw = 0.0
         
         # ค่าพารามิเตอร์สำหรับการควบคุม
-        self.linear_speed = 0.2  # m/s
-        self.angular_speed = 0.3  # ลดความเร็วการหมุนลง
-        self.position_tolerance = 0.15  # เพิ่มค่า tolerance ระยะทาง
-        self.yaw_tolerance = 0.15  # เพิ่มค่า tolerance มุม
+        self.linear_speed = 0.2
+        self.angular_speed = 0.3
+        self.position_tolerance = 0.15
+        self.yaw_tolerance = 0.15
         
-        # เพิ่มค่า hysteresis
-        self.rotation_start_threshold = 0.2  # เริ่มหมุนเมื่อเบี่ยงเบนมากกว่านี้
-        self.rotation_stop_threshold = 0.1   # หยุดหมุนเมื่อเบี่ยงเบนน้อยกว่านี้
+        self.rotation_start_threshold = 0.2
+        self.rotation_stop_threshold = 0.1
         
-        # เพิ่มตัวแปรสำหรับ smoothing
         self.prev_angular_vel = 0.0
-        self.angular_vel_smoothing = 0.3  # ค่าการ smooth ความเร็วเชิงมุม
+        self.angular_vel_smoothing = 0.3
         
         # อ่านเส้นทางจากไฟล์ CSV
         self.waypoints = self.load_waypoints('/home/thanawat/amr_ws/robot_poses.csv')
-        self.waypoints.reverse()  # กลับลำดับจุดเพื่อย้อนกลับ
+        self.waypoints.reverse()
         self.current_waypoint_index = 0
         
         # สร้าง timer สำหรับ control loop
         self.timer = self.create_timer(0.1, self.control_loop)
         
         self.get_logger().info('เริ่มต้นการเคลื่อนที่ย้อนกลับ')
+
+    def quaternion_to_yaw(self, x, y, z, w):
+        """
+        แปลง quaternion เป็นมุม yaw โดยไม่ใช้ euler_from_quaternion
+        """
+        # คำนวณ yaw จาก quaternion โดยตรง
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return yaw
 
     def load_waypoints(self, filename):
         waypoints = []
@@ -69,21 +76,23 @@ class RobotWaypointFollower(Node):
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
         
-        # แปลง quaternion เป็น yaw
+        # แปลง quaternion เป็น yaw โดยใช้ฟังก์ชันที่เขียนขึ้นเอง
         orientation_q = msg.pose.pose.orientation
-        q = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
-        _, _, self.current_yaw = euler_from_quaternion(q)
+        self.current_yaw = self.quaternion_to_yaw(
+            orientation_q.x,
+            orientation_q.y,
+            orientation_q.z,
+            orientation_q.w
+        )
 
     def get_distance_to_goal(self, goal_x, goal_y):
         return math.sqrt((goal_x - self.current_x)**2 + (goal_y - self.current_y)**2)
 
     def get_angle_to_goal(self, goal_x, goal_y):
-        # คำนวณมุมที่ต้องหันไปยังเป้าหมาย
         dx = goal_x - self.current_x
         dy = goal_y - self.current_y
         target_angle = math.atan2(dy, dx)
         
-        # คำนวณความต่างของมุม
         angle_diff = target_angle - self.current_yaw
         
         # ปรับมุมให้อยู่ในช่วง -pi ถึง pi
@@ -106,25 +115,19 @@ class RobotWaypointFollower(Node):
 
         cmd = Twist()
         
-        # ตรวจสอบว่าถึงจุดหมายหรือยัง
         if distance <= self.position_tolerance:
-            # เมื่อถึงจุดหมาย ไปยังจุดถัดไปได้เลย โดยไม่ต้องปรับมุมสุดท้าย
             self.current_waypoint_index += 1
-            self.prev_angular_vel = 0.0  # รีเซ็ตค่า smoothing
+            self.prev_angular_vel = 0.0
             self.get_logger().info(f'ถึงจุดที่ {self.current_waypoint_index}/{len(self.waypoints)}')
         else:
-            # ยังไม่ถึงจุดหมาย ต้องเคลื่อนที่ต่อ
             if abs(angle) > self.rotation_start_threshold:
-                # หมุนเพื่อปรับทิศทาง
                 target_angular_vel = self.angular_speed * math.copysign(1, angle) * min(1.0, abs(angle))
                 cmd.angular.z = (self.prev_angular_vel * (1 - self.angular_vel_smoothing) + 
                             target_angular_vel * self.angular_vel_smoothing)
                 self.prev_angular_vel = cmd.angular.z
                 self.get_logger().info(f'กำลังหมุน: {math.degrees(angle):.2f}°')
             else:
-                # เคลื่อนที่ไปข้างหน้า
                 cmd.linear.x = min(self.linear_speed, distance)
-                # ปรับมุมเล็กน้อยขณะเคลื่อนที่
                 cmd.angular.z = angle * 0.5
                 self.get_logger().info(f'กำลังเคลื่อนที่: ระยะทาง={distance:.2f}m, มุม={math.degrees(angle):.2f}°')
 
